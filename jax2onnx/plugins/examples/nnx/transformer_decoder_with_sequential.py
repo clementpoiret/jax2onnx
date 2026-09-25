@@ -155,6 +155,7 @@ register_example(
     testcases=[
         {
             "testcase": "tiny_decoder_with_sequential",
+            "normalization_mode": "prefer_native",
             "callable": construct_and_call(
                 TransformerDecoder,
                 num_layers=1,
@@ -180,6 +181,7 @@ register_example(
         },
         {
             "testcase": "tiny_decoder_with_sequential_and_full_dynamic_shapes",
+            "normalization_mode": "prefer_native",
             "callable": construct_and_call(
                 TransformerDecoder,
                 num_layers=1,
