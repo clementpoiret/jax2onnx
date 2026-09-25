@@ -19,6 +19,23 @@
 ## Current Version
 
 
+### **jax2onnx 0.16.2**
+
+
+* **Preserve transposed-convolution geometry:** Lower input-dilated
+  `lax.conv_general_dilated` (used by `eqx.nn.ConvTranspose`,
+  `nnx.ConvTranspose`, `jax.lax.conv_transpose`, and `nnx.Conv` with
+  `input_dilation`) to ONNX `ConvTranspose` with the input dilation as its
+  strides, a group-aware kernel layout, and an explicit output `Pad` where JAX
+  pads beyond the kernel's reach, so exported shapes and values match JAX; fail
+  export explicitly for strided input dilation, `batch_group_count > 1`, and
+  complex transposed convolutions instead of emitting different semantics.
+* **Make GELU exports opset-aware:** Emit ONNX `Gelu` only for opset 20 and
+  newer, and lower `jax.nn.gelu` and `nnx.gelu` below opset 20 to the exact
+  (`Erf`) or tanh-approximate formula so the graph validates at the requested
+  opset.
+
+
 ### **jax2onnx 0.16.1**
 
 
