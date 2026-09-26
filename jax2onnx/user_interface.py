@@ -542,8 +542,10 @@ def to_onnx(
             `return_mode="file"`; `"proto"` and `"ir"` return values are unchanged.
         normalization_mode: Export policy for normalization plugins that offer
             both native ONNX operators and decomposed forms. `"auto"` (default)
-            emits the explicit graph, which reproduces the framework's own
-            statistics independently of the runtime's normalization kernels.
+            exports the representation with the best reproducible accuracy and
+            uses a native ONNX operator only when it meets the same locked
+            accuracy bounds; currently this is the explicit graph, which
+            reproduces the framework's own statistics.
             `"prefer_native"` uses a standard ONNX normalization operator when
             the selected opset and the plugin's numerical constraints permit it
             (`LayerNormalization` from opset 17, `GroupNormalization` from 21,

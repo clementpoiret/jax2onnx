@@ -62,9 +62,12 @@ that roundoff. Use strict parity checks on representative, nonconstant inputs;
 for degenerate normalization inputs, also check finiteness and apply a tolerance
 specific to the model, dtype, and runtime.
 
-By default (`normalization_mode="auto"`), GroupNorm and Equinox/Flax RMSNorm
-and LayerNorm export explicit graphs that reproduce the framework's own
-statistics, independently of the runtime's normalization kernels. Set
+By default (`normalization_mode="auto"`), each normalization plugin exports the
+representation with the best reproducible accuracy, and uses a native ONNX
+operator only when it meets the same locked accuracy bounds. Currently no
+native operator does, so GroupNorm and Equinox/Flax RMSNorm and LayerNorm
+export explicit graphs that reproduce the framework's own statistics,
+independently of the runtime's normalization kernels. Set
 `normalization_mode="prefer_native"` to opt into the standard ONNX operators
 where the opset defines them and the plugin can map faithfully:
 `LayerNormalization` from opset 17, Fast-Variance `GroupNormalization` from
@@ -91,6 +94,23 @@ costs about a dozen nodes per layer. The explicit LayerNorm and RMSNorm graphs
 square with `Mul` so that ONNX Runtime's optimizer does not fuse them back into
 its native normalization kernels; other runtimes may still recognize and fuse
 explicit normalization patterns.
+
+The LayerNorm accuracy bounds are locked in
+`tests/extra_tests/test_layer_norm_precision.py`, which is the source of truth.
+On float32 rows with massive activations (384 features, outlier channels up to
+1700), float32 outputs must stay within these maximum absolute errors on the
+ONNX Runtime CPU provider, with graph optimizations enabled or disabled:
+
+| Mode | LayerNorm variant | vs. float64 reference | vs. JAX |
+| --- | --- | --- | --- |
+| `auto`, `force_decomposed` | Equinox, Flax slow variance | 4.1e-6 | 3.9e-6 |
+| `auto`, `force_decomposed` | Flax fast variance (default) | 4.1e-6 | 5.8e-6 |
+| `prefer_native` | Equinox, Flax slow variance | 1.2e-5 | 1.2e-5 |
+| `prefer_native` | Flax fast variance (default) | 1.2e-5 | 1.4e-5 |
+
+The bounds were measured with ONNX Runtime 1.29 on an x86-64 CPU and rounded
+up to two significant digits; JAX itself is about 3e-6 from the float64
+reference on these rows.
 
 The opset only selects the ONNX schema contract; it does not assert support in a
 particular runtime version. Validate the chosen `opset` and normalization mode

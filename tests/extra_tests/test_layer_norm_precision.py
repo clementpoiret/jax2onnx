@@ -85,12 +85,14 @@ def _eqx_ln(features: int) -> Callable[[jax.Array], jax.Array]:
 
 
 def _nnx_ln(features: int, *, fast: bool = True) -> Callable[[jax.Array], jax.Array]:
-    layer = nnx.LayerNorm(features, use_fast_variance=fast, rngs=nnx.Rngs(0))
+    layer = nnx.LayerNorm(
+        features, epsilon=1e-5, use_fast_variance=fast, rngs=nnx.Rngs(0)
+    )
     return lambda x: layer(x)
 
 
 def _linen_ln(features: int) -> Callable[[jax.Array], jax.Array]:
-    module = nn.LayerNorm()
+    module = nn.LayerNorm(epsilon=1e-5)
     params = module.init(jax.random.PRNGKey(0), jnp.zeros((1, features)))
     return lambda x: module.apply(params, x)
 
@@ -179,26 +181,104 @@ def test_explicit_layer_norm_propagates_non_finite_constant_rows() -> None:
     np.testing.assert_array_equal(actual[3], 0.0)
 
 
+@pytest.mark.parametrize("normalization_mode", ["auto", "force_decomposed"])
+@pytest.mark.parametrize("nan_column", [0, 3, 7], ids=["first", "middle", "last"])
 @pytest.mark.parametrize(
     "make_fn",
-    [lambda: _eqx_ln(384), lambda: _nnx_ln(384, fast=False)],
+    [lambda: _eqx_ln(8), lambda: _nnx_ln(8, fast=False)],
     ids=["eqx", "nnx_slow_variance"],
 )
-def test_explicit_layer_norm_tracks_framework_precision_on_massive_activations(
+def test_explicit_layer_norm_propagates_nan_in_otherwise_constant_rows(
     make_fn: Callable[[], Callable[[jax.Array], jax.Array]],
+    nan_column: int,
+    normalization_mode: str,
 ) -> None:
+    # ReduceMin/ReduceMax may skip NaN, so min == max must not mark these rows
+    # constant.
     fn = make_fn()
+    x: np.ndarray = np.ones((3, 8), np.float32)
+    x[0, nan_column] = np.nan
+    x[1, nan_column] = np.inf
+    expected = np.asarray(fn(jnp.asarray(x)))
+
+    model = to_onnx(fn, [x], opset=23, normalization_mode=normalization_mode)
+    actual = _run(model, x)
+
+    assert np.isnan(expected[:2]).all()
+    np.testing.assert_array_equal(actual, expected)
+
+
+# Accuracy gate on the massive-activation rows, as maximum absolute errors
+# against the float64 two-pass LayerNorm and against JAX. Bounds are the errors
+# measured with ONNX Runtime 1.29 CPU (AMD Ryzen 9 9950X3D; JAX 0.10.2 and
+# 0.11.1, identical results) rounded up to two significant digits. Change them
+# only with a justification and before/after evidence; never derive them from
+# the run under test.
+_LAYER_NORM_ERROR_BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
+    # (variant, normalization_mode): (float64 reference, JAX parity)
+    ("eqx", "auto"): (4.1e-6, 3.9e-6),
+    ("eqx", "force_decomposed"): (4.1e-6, 3.9e-6),
+    ("eqx", "prefer_native"): (1.2e-5, 1.2e-5),
+    ("nnx_slow", "auto"): (4.1e-6, 3.9e-6),
+    ("nnx_slow", "force_decomposed"): (4.1e-6, 3.9e-6),
+    ("nnx_slow", "prefer_native"): (1.2e-5, 1.2e-5),
+    ("nnx_fast", "auto"): (4.1e-6, 5.8e-6),
+    ("nnx_fast", "force_decomposed"): (4.1e-6, 5.8e-6),
+    ("nnx_fast", "prefer_native"): (1.2e-5, 1.4e-5),
+    ("linen", "auto"): (4.1e-6, 5.8e-6),
+    ("linen", "force_decomposed"): (4.1e-6, 5.8e-6),
+    ("linen", "prefer_native"): (1.2e-5, 1.4e-5),
+}
+
+_GATE_VARIANTS: dict[str, Callable[[], Callable[[jax.Array], jax.Array]]] = {
+    "eqx": lambda: _eqx_ln(384),
+    "nnx_slow": lambda: _nnx_ln(384, fast=False),
+    "nnx_fast": lambda: _nnx_ln(384),
+    "linen": lambda: _linen_ln(384),
+}
+
+
+@pytest.mark.parametrize(
+    "optimization_level",
+    [
+        ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
+        ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
+    ],
+    ids=["ort_optimized", "ort_unoptimized"],
+)
+@pytest.mark.parametrize(
+    ("variant", "normalization_mode"), list(_LAYER_NORM_ERROR_BOUNDS)
+)
+def test_layer_norm_accuracy_on_massive_activations_within_locked_bounds(
+    variant: str,
+    normalization_mode: str,
+    optimization_level: ort.GraphOptimizationLevel,
+) -> None:
+    fn = _GATE_VARIANTS[variant]()
     x = _massive_activation_rows()
     x64: np.ndarray = x.astype(np.float64)
     centered = x64 - x64.mean(-1, keepdims=True)
     exact = centered / np.sqrt((centered**2).mean(-1, keepdims=True) + 1e-5)
-    jax_error = np.abs(np.asarray(fn(jnp.asarray(x)), np.float64) - exact).max()
+    jax_out = np.asarray(fn(jnp.asarray(x)), np.float64)
 
-    model = to_onnx(fn, [x], opset=23, normalization_mode="force_decomposed")
-    explicit_error = np.abs(_run(model, x).astype(np.float64) - exact).max()
+    model = to_onnx(fn, [x], opset=23, normalization_mode=normalization_mode)
+    options = ort.SessionOptions()
+    options.graph_optimization_level = optimization_level
+    session = ort.InferenceSession(
+        model.SerializeToString(), options, providers=["CPUExecutionProvider"]
+    )
+    (actual,) = session.run(None, {session.get_inputs()[0].name: x})
+    onnx_out = np.asarray(actual, np.float64)
 
-    # ONNX Runtime's CPU LayerNormalization kernel is ~4x JAX's error here.
-    assert explicit_error <= 2.5 * jax_error, (explicit_error, jax_error)
+    reference_error = float(np.abs(onnx_out - exact).max())
+    jax_error = float(np.abs(onnx_out - jax_out).max())
+    reference_bound, jax_bound = _LAYER_NORM_ERROR_BOUNDS[(variant, normalization_mode)]
+    report = (
+        f"float64 reference error {reference_error:.3e} (bound {reference_bound:.1e}), "
+        f"JAX parity error {jax_error:.3e} (bound {jax_bound:.1e})"
+    )
+    assert reference_error <= reference_bound, report
+    assert jax_error <= jax_bound, report
 
 
 def _optimized_ln_family_count(model: onnx.ModelProto, path: Path) -> int:
@@ -236,7 +316,9 @@ def _textbook_pow_layer_norm() -> onnx.ModelProto:
         [helper.make_tensor_value_info("y", TensorProto.FLOAT, [4, 8])],
         [axes, two, eps, scale, bias],
     )
-    return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    return helper.make_model(
+        graph, ir_version=10, opset_imports=[helper.make_opsetid("", 18)]
+    )
 
 
 @pytest.mark.parametrize(

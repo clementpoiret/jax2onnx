@@ -146,7 +146,9 @@ def _textbook_pow_rms_norm() -> onnx.ModelProto:
             helper.make_tensor("scale", TensorProto.FLOAT, [6], [1.0] * 6),
         ],
     )
-    return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    return helper.make_model(
+        graph, ir_version=10, opset_imports=[helper.make_opsetid("", 18)]
+    )
 
 
 @pytest.mark.parametrize("framework", ["nnx", "eqx"])

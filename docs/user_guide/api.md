@@ -52,9 +52,10 @@ single self-contained `.onnx` file instead of spilling large initializers into a
 - `return_mode`: `"proto"` for an `onnx.ModelProto`, `"ir"` for the intermediate `onnx_ir.Model`, or `"file"` to serialize directly to disk.
 - `export_mode`: `"standard"` for normal serialization, or `"web"` for single-file browser/WASM artifacts.
 - `normalization_mode`: Selection policy for GroupNorm and Equinox/Flax RMSNorm
-  and LayerNorm. `"auto"` (default) emits the explicit graph that
-  reproduces the framework's statistics independently of the runtime's
-  normalization kernels. `"prefer_native"` uses a standard ONNX normalization
+  and LayerNorm. `"auto"` (default) exports the representation with the best
+  reproducible accuracy, and uses a native ONNX operator only when it meets the
+  same locked accuracy bounds; currently this is the explicit graph that
+  reproduces the framework's statistics. `"prefer_native"` uses a standard ONNX normalization
   operator (`LayerNormalization` from opset 17, `GroupNormalization` from 21,
   `RMSNormalization` from 23) when the plugin's numerical constraints permit it,
   otherwise falling back to the explicit graph; it gives smaller graphs that

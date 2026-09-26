@@ -44,7 +44,7 @@ def test_jnp_cos_float64_uses_sin_for_onnxruntime() -> None:
 
     assert {"Add", "Sin"} <= _op_types(model)
     assert "Cos" not in _op_types(model)
-    np.testing.assert_allclose(_run(model, x), np.cos(x), atol=1e-12)
+    np.testing.assert_allclose(_run(model, x), np.cos(x), rtol=0, atol=1e-12)
 
 
 def test_jnp_cos_is_accurate_for_rotary_angles() -> None:

@@ -35,9 +35,11 @@
   (`Erf`) or tanh-approximate formula so the graph validates at the requested
   opset.
 * **Behavior change: explicit normalization graphs by default.**
-  `normalization_mode="auto"` now exports GroupNorm, Flax RMSNorm, and
-  Equinox/Flax LayerNorm as explicit graphs that reproduce the framework's
-  statistics, instead of ONNX `LayerNormalization` (opset 17+) or
+  `normalization_mode="auto"` now exports the representation with the best
+  reproducible accuracy and prefers native operators only when they meet the
+  same locked accuracy bounds. For GroupNorm, Flax RMSNorm, and Equinox/Flax
+  LayerNorm this is currently the explicit graph that reproduces the
+  framework's statistics, instead of ONNX `LayerNormalization` (opset 17+) or
   `RMSNormalization` (opset 23+). Pass `normalization_mode="prefer_native"` to
   keep the native operators, for example for smaller graphs on accelerated
   runtimes.
@@ -55,6 +57,9 @@
 * **Keep explicit RMSNorm graphs explicit at runtime:** Equinox and Flax RMSNorm
   now square with `Mul` instead of `Pow`, so ONNX Runtime no longer fuses the
   explicit graph into its `SimplifiedLayerNormalization` kernel.
+* **Propagate NaN through Slow-Variance GroupNorm:** A group containing NaN
+  among otherwise equal values is no longer exported as exactly centered
+  zeros; it yields NaN like JAX.
 * **Export `jnp.cos` as `Cos` below float64:** Keep the `Sin(x + π/2)`
   workaround only for float64, which ONNX Runtime's `Cos` kernel lacks, so
   float32 rotary embeddings no longer lose accuracy to the shifted argument.

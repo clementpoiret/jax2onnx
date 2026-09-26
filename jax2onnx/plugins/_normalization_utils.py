@@ -2,8 +2,9 @@
 
 """Explicit LayerNorm lowering shared by the Equinox and Flax plugins.
 
-This explicit graph is the default (``normalization_mode="auto"``) and follows
-the framework's statistics: two-pass variance (with exact zeros for constant
+``normalization_mode="auto"`` selects this explicit graph because it has the
+best reproducible accuracy (see ``tests/extra_tests/test_layer_norm_precision.py``
+for the locked bounds). It follows the framework's statistics: two-pass variance (with exact zeros for constant
 rows) or Flax's clamped fast variance. ONNX ``LayerNormalization`` is emitted
 only for ``"prefer_native"`` at opset 17 or newer; ONNX Runtime's CPU kernel for
 it accumulates statistics in one sequential float32 pass, which loses precision
@@ -173,9 +174,10 @@ def lower_explicit_layer_norm(
                 row_min, row_max, _outputs=[ctx.fresh_name("ln_equal_extrema")]
             )
         )
-        # Self-subtraction is zero for finite values and NaN for +/-Inf or NaN.
+        # The mean's self-subtraction is zero only if every element is finite:
+        # ReduceMin/ReduceMax may skip NaN, but ReduceMean propagates it.
         finite_delta = stats(
-            builder.Sub(row_min, row_min, _outputs=[ctx.fresh_name("ln_finite_delta")]),
+            builder.Sub(mean, mean, _outputs=[ctx.fresh_name("ln_finite_delta")]),
             reduced_dims,
         )
         finite_row = boolean(
