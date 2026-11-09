@@ -782,13 +782,6 @@ class ScanPlugin(PrimitiveLeafPlugin):
 
         has_scatter = _jaxpr_contains_scatter(jaxpr)
 
-        for cv, cval in zip(jaxpr.constvars, closed_jaxpr.consts):
-            np_c = np.asarray(cval)
-            aval = getattr(cv, "aval", None)
-            if aval is not None:
-                np_c = np_c.astype(getattr(aval, "dtype", np_c.dtype), copy=False)
-            loop_ctx.bind_const_for_var(cv, np_c)
-
         iter_in, cond_in = create_loop_header_inputs(
             loop_ctx,
             prefix="scan_loop",
@@ -855,6 +848,8 @@ class ScanPlugin(PrimitiveLeafPlugin):
                 flush=True,
             )
 
+        # After the formals above: a selected capture appends its own body formal.
+        loop_ctx.bind_captured_arrays(jaxpr.constvars, closed_jaxpr.consts)
         lower_jaxpr_eqns(loop_ctx, jaxpr, source="scan")
 
         body_outputs: list[ir.Value] = []
@@ -1228,13 +1223,6 @@ class ScanPlugin(PrimitiveLeafPlugin):
         loop_ctx = make_subgraph_context(ctx, prefix="scan_loop")
         call_parameters = LoopCallParameters(ctx, loop_ctx)
 
-        for cv, cval in zip(jaxpr.constvars, closed_jaxpr.consts):
-            np_c = np.asarray(cval)
-            aval = getattr(cv, "aval", None)
-            if aval is not None:
-                np_c = np_c.astype(getattr(aval, "dtype", np_c.dtype), copy=False)
-            loop_ctx.bind_const_for_var(cv, np_c)
-
         iter_in, cond_in = create_loop_header_inputs(
             loop_ctx,
             prefix="scan_loop",
@@ -1400,6 +1388,8 @@ class ScanPlugin(PrimitiveLeafPlugin):
                     _ensure_value_metadata(loop_ctx, expanded)
                     loop_ctx.bind_value_for_var(per_step_var, expanded)
 
+        # After the formals above: a selected capture appends its own body formal.
+        loop_ctx.bind_captured_arrays(jaxpr.constvars, closed_jaxpr.consts)
         lower_jaxpr_eqns(loop_ctx, jaxpr, source="scan")
 
         body_outputs: list[ir.Value] = []

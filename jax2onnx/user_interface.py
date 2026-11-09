@@ -85,6 +85,7 @@ from jax2onnx.converter.conversion_api import (
     to_onnx as to_onnx_impl,
 )
 from jax2onnx.converter.ir_postprocess import postprocess_ir_model
+from jax2onnx.converter.state_inputs import StateSelector
 from jax2onnx.ir_utils import numpy_dtype_to_ir
 from jax2onnx.plugins.plugin_system import onnx_function as onnx_function_impl
 
@@ -430,6 +431,7 @@ if TYPE_CHECKING:
         output_names: Optional[Sequence[str]] = ...,
         export_mode: ExportMode = ...,
         normalization_mode: NormalizationMode = ...,
+        state: Optional[StateSelector] = ...,
     ) -> onnx.ModelProto: ...
 
     @overload
@@ -449,6 +451,7 @@ if TYPE_CHECKING:
         output_names: Optional[Sequence[str]] = ...,
         export_mode: ExportMode = ...,
         normalization_mode: NormalizationMode = ...,
+        state: Optional[StateSelector] = ...,
     ) -> ir.Model: ...
 
     @overload
@@ -468,6 +471,7 @@ if TYPE_CHECKING:
         output_names: Optional[Sequence[str]] = ...,
         export_mode: ExportMode = ...,
         normalization_mode: NormalizationMode = ...,
+        state: Optional[StateSelector] = ...,
     ) -> str: ...
 
 
@@ -487,6 +491,7 @@ def to_onnx(
     output_names: Optional[Sequence[str]] = None,
     export_mode: ExportMode = "standard",
     normalization_mode: NormalizationMode = "auto",
+    state: Optional[StateSelector] = None,
     **removed_options: Never,
 ) -> Union[onnx.ModelProto, ir.Model, str]:
     """
@@ -554,6 +559,12 @@ def to_onnx(
             LayerNorm with use_fast_variance=False traces JAX in every mode.
             `"force_decomposed"` selects the explicit graph. Runtime graph optimization is separate from
             the exported representation. See the user guide for tested limits.
+        state: Optional callback that exposes captured arrays as named ONNX
+            inputs with saved defaults. It receives each array the traced
+            function captured and returns a `StateInput`, or `None` to keep that
+            array a constant. An array object is exposed once however often it
+            is read, and only arrays the exported computation reads appear.
+            Selected arrays cannot be captured inside an `@onnx_function` body.
 
     Returns:
         * If `return_mode="proto"` (default): Returns an `onnx.ModelProto` object.
@@ -679,6 +690,7 @@ def to_onnx(
             input_names=normalized_input_names,
             output_names=normalized_output_names,
             normalization_mode=normalized_normalization_mode,
+            state=state,
         )
         postprocess_ir_model(result)
 

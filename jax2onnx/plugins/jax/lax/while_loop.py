@@ -43,8 +43,7 @@ def _unwrap_closed_jaxpr(jaxpr_like: Any) -> tuple[Any, tuple[Any, ...]]:
 def _bind_closed_jaxpr_consts(
     ctx: LoweringContextProtocol, jaxpr: Any, consts: Iterable[object]
 ) -> None:
-    for var, const in zip(getattr(jaxpr, "constvars", ()), consts):
-        ctx.bind_const_for_var(var, np.asarray(const))
+    ctx.bind_captured_arrays(getattr(jaxpr, "constvars", ()), consts)
 
 
 def _while_loop_multi_state(x: jax.Array) -> jax.Array:
@@ -303,10 +302,7 @@ def _build_loop_body_graph(
         body_ctx.builder.inputs.append(predicate_input)
 
     body_jaxpr, body_consts = _unwrap_closed_jaxpr(body_cj)
-    _bind_closed_jaxpr_consts(body_ctx, body_jaxpr, body_consts)
-
     cond_jaxpr, cond_consts = _unwrap_closed_jaxpr(cond_cj)
-    _bind_closed_jaxpr_consts(body_ctx, cond_jaxpr, cond_consts)
 
     body_invars_iter = iter(body_jaxpr.invars)
 
@@ -352,6 +348,9 @@ def _build_loop_body_graph(
     else:  # pragma: no cover - defensive programming
         raise ValueError("while_loop body_jaxpr has more invars than expected")
 
+    # After the formals above: a selected capture appends its own body formal.
+    _bind_closed_jaxpr_consts(body_ctx, body_jaxpr, body_consts)
+    _bind_closed_jaxpr_consts(body_ctx, cond_jaxpr, cond_consts)
     lower_jaxpr_eqns(body_ctx, body_jaxpr, source="while_loop_body")
 
     state_candidates = [

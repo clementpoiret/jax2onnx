@@ -29,9 +29,10 @@ For a full export validation checklist, see
 [Validation & Deployment Readiness](validation.md).
 
 To expose selected weights and buffers as named ONNX inputs with saved defaults,
-see the experimental [explicit model-state walkthrough](explicit_state_export.md). It shows
-the export-wrapper and runtime-feed changes using repository-local helpers;
-the public `to_onnx` signature stays unchanged.
+pass `state=` to `to_onnx`; see
+[Select captured arrays directly](explicit_state_export.md#select-captured-arrays-directly).
+The same page walks through an experimental recipe that uses an explicit export
+wrapper instead.
 
 For browser deployment with [`onnxruntime-web`](https://onnxruntime.ai/docs/tutorials/web/), use the Web export profile:
 

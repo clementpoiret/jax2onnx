@@ -30,6 +30,7 @@ from jax2onnx.ir_utils import (
 from .ir_builder import IRBuilder
 from .ir_constants import ConstantFolder
 from .lower_dimexpr import LowerDimExpr
+from .state_inputs import StateInputs
 from .typing_support import ConverterContext, SymbolicDimOrigin
 from jax2onnx._compat.jax import JaxprEqn
 from jax2onnx.utils.debug import RecordedPrimitiveCallLog
@@ -233,6 +234,7 @@ class IRContext:
         self._promote_call_input_params: bool = True
         self._implicit_capture_parent: IRContext | None = None
         self._external_flag_resolver: Callable[[str], ir.Value] | None = None
+        self._state_inputs: StateInputs | None = None
         self._const_folder = ConstantFolder()
         self._current_eqn: JaxprEqn | None = None
         self._primitive_call_records: list[RecordedPrimitiveCallLog] = []
@@ -312,6 +314,7 @@ class IRContext:
         child.builder._function_mode = True
         child._function_registry = self._function_registry
         child._func_name_counters = self._func_name_counters
+        child._state_inputs = self._state_inputs
         child._call_input_param_names = set(self._call_input_param_names)
         child._call_input_param_literals = dict(self._call_input_param_literals)
         child._promote_call_input_params = (
@@ -390,7 +393,7 @@ class IRContext:
         self._external_flag_resolver = resolver
 
     def ensure_external_flag(self, name: str, var: object | None) -> ir.Value:
-        """Resolve a BOOL[] input, a function formal, or an If-branch capture.
+        """Resolve a named root input, a function formal, or an If-branch capture.
 
         Function and Loop bodies require explicit local bindings. If branches
         may capture an enclosing flag through a local Identity on first use.
@@ -581,6 +584,30 @@ class IRContext:
         except TypeError:
             pass
         return value
+
+    def bind_captured_arrays(
+        self, variables: Iterable[Any], arrays: Iterable[object]
+    ) -> None:
+        """Bind arrays JAX captured while tracing this scope.
+
+        Arrays selected through ``to_onnx(state=...)`` read their root graph
+        input, which ``ensure_external_flag`` threads through If and Loop bodies.
+        Everything else becomes a constant.
+        """
+        for var, array in zip(variables, arrays):
+            name = None
+            if self._state_inputs is not None:
+                name = self._state_inputs.input_name(var, array)
+            if name is None:
+                self.bind_const_for_var(var, np.asarray(array))
+                continue
+            if not self._promote_call_input_params:
+                raise ValueError(
+                    f"State input {name!r} is captured inside an ONNX Function, "
+                    "which cannot read graph inputs. Keep the array constant or "
+                    "pass it to the function as an argument."
+                )
+            self.bind_value_for_var(var, self.ensure_external_flag(name, None))
 
     # Bind an existing IR Value to a JAX var (no new Value created).
     # Used by FunctionPlugin to tie function-scope inputs to inner jaxpr invars.

@@ -45,6 +45,7 @@ from jax2onnx.plugins._ir_shapes import _as_ir_dim_label
 
 from .ir_context import IRContext
 from .ir_optimizations import optimize_graph
+from .state_inputs import StateInputs, StateSelector
 from .function_scope import FunctionRegistry
 from . import lowering_dispatch as _lowering_dispatch
 from .typing_support import IRBuilderAPI, LoweringContextProtocol
@@ -444,6 +445,9 @@ def _build_and_finalize_ir_model(
     except Exception as exc:
         _log_nonfatal_stage_failure("finalize_model_value_shapes", exc)
 
+    if ctx._state_inputs is not None:
+        ctx._state_inputs.attach_defaults(ir_model)
+
     return ir_model
 
 
@@ -473,6 +477,7 @@ def _create_ir_context(
     frozen_params: Mapping[str, object],
     record_primitive_calls_file: Optional[str],
     normalization_mode: str = "auto",
+    state: Optional[StateSelector] = None,
 ) -> IRContext:
     ctx = IRContext(
         opset=opset,
@@ -481,6 +486,12 @@ def _create_ir_context(
     )
     ctx._call_input_param_names = set(frozen_params.keys())
     ctx._call_input_param_literals = dict(frozen_params)
+    if state is not None:
+        ctx._state_inputs = StateInputs(
+            state,
+            graph_inputs=ctx.builder.inputs,
+            reserved_names=ctx._call_input_param_names,
+        )
 
     if record_primitive_calls_file:
         ctx.record_primitive_calls_file = str(record_primitive_calls_file)
@@ -496,10 +507,10 @@ def _bind_closed_jaxpr_constants(
     jpr: Any,
     consts: Sequence[object],
 ) -> None:
-    for cv, cval in zip(jpr.constvars, consts):
+    for cv in jpr.constvars:
         if _maybe_dtype(cv.aval) is None:
             raise TypeError("Constant has no traced dtype")
-        ctx.bind_const_for_var(cv, np.asarray(cval))
+    ctx.bind_captured_arrays(jpr.constvars, consts)
 
 
 class _LayoutAdapter:
@@ -704,6 +715,7 @@ def to_onnx(
     output_names: Optional[Sequence[str]] = None,
     normalization_mode: str = "auto",
     strict_optimizer_failures: Optional[bool] = None,
+    state: Optional[StateSelector] = None,
 ) -> ir.Model:
     """
     Build an ONNX-IR model in three phases:
@@ -726,9 +738,11 @@ def to_onnx(
         input_specs=trace.sds_list,
         frozen_params=trace.frozen_params,
         record_primitive_calls_file=record_primitive_calls_file,
+        state=state,
     )
-    _bind_closed_jaxpr_constants(ctx, trace.jaxpr, trace.closed_jaxpr.consts)
+    # Data inputs go first so selected state follows them in graph.input.
     _bind_jaxpr_inputs(ctx, trace.jaxpr, inputs_as_nchw=trace.inputs_as_nchw)
+    _bind_closed_jaxpr_constants(ctx, trace.jaxpr, trace.closed_jaxpr.consts)
 
     _lower_jaxpr_equations(ctx, trace.jaxpr)
     _bind_jaxpr_outputs(ctx, trace.jaxpr, outputs_as_nchw=trace.outputs_as_nchw)

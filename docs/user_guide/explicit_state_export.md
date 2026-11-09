@@ -6,9 +6,11 @@ inputs with saved defaults. A caller can run inference with the defaults or
 supply replacement arrays by name.
 
 This is an experimental recipe in the repository's `scripts/` directory. The
-public `jax2onnx.to_onnx` API stays unchanged. The recipe adds an example-local
-export helper and changes the interface of the ONNX model you choose to export.
-The helpers are not public imports from the installed `jax2onnx` package.
+recipe adds an example-local export helper and changes the interface of the ONNX
+model you choose to export. The helpers are not public imports from the
+installed `jax2onnx` package. To expose arrays a model already captures without
+writing a wrapper, see
+[Select captured arrays directly](#select-captured-arrays-directly).
 
 The walkthrough uses a small Equinox attention model with rotary position
 embeddings (RoPE). It illustrates the sharing and freeze-policy questions in
@@ -422,3 +424,46 @@ and external optimizer outputs need their own compatibility checks.
 Keeping state dynamic can reduce constant folding and precomputation. Use the
 ordinary closed-model export for a fixed inference artifact. This example
 promises no runtime-speed or peak-memory improvement.
+
+## Select captured arrays directly
+
+`to_onnx(..., state=callback)` produces the same kind of interface without an
+export wrapper. The callback receives each array the traced function captured
+and returns a `StateInput`, or `None` to keep that array a constant:
+
+```python
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+
+from jax2onnx import StateInput, to_onnx
+
+model = eqx.nn.Linear(3, 2, key=jax.random.PRNGKey(0))
+selected = {
+    id(model.weight): StateInput(
+        "weight", metadata={"pkg.example.trainable": "true"}
+    ),
+    id(model.bias): StateInput("bias", overridable=False),
+}
+
+onnx_model = to_onnx(
+    model,
+    inputs=[jax.ShapeDtypeStruct((3,), jnp.float32)],
+    state=lambda array: selected.get(id(array)),
+)
+```
+
+Selected arrays become named graph inputs after the data inputs, in capture
+order. Each one has a single initializer that holds its default and metadata.
+
+- One array object is one input, however many scopes read it, including `jit`,
+  `cond` and loop bodies. Equal-valued independent arrays stay separate.
+- The callback sees the array JAX captured. A copy or dtype conversion made
+  before the array is read is a different object, so match that object or the
+  array remains a constant.
+- `overridable=False` stores the array as an ordinary initializer. It keeps its
+  metadata, and runtimes may fold computations that read it, which suits fixed
+  inference artifacts.
+- A selected array the exported computation never reads is left out.
+- Complex arrays and arrays captured inside an `@onnx_function` body are
+  rejected with an error. Pass state to such a function as an argument instead.

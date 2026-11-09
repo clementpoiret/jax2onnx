@@ -95,7 +95,7 @@ def make_subgraph_context(
 
 
 class LoopCallParameters:
-    """Thread lazily requested export flags through explicit Loop state.
+    """Thread lazily requested root inputs through explicit Loop state.
 
     Export-time Python flags do not appear among the JAX body's operands. A
     nested Function may nevertheless request one as a dynamic model parameter.

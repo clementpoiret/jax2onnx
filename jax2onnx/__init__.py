@@ -1,5 +1,6 @@
 # jax2onnx/__init__.py
 
+from jax2onnx.converter.state_inputs import StateInput  # noqa: F401
 from jax2onnx.user_interface import (  # noqa: F401
     to_onnx,
     onnx_function,
